@@ -1,0 +1,37 @@
+version: '3.8'
+name: rate-limiter-platform
+services:
+  # Redis (全局计数)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+
+  # Kafka + Zookeeper (事件总线)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT:  zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+     - "8123:8123"
+     - "9000:9000"
+
+  # Prometheus + Grafana (可选，后期加)
+  # prometheus:
+  #   image:  prom/prometheus:latest
+  #   ...

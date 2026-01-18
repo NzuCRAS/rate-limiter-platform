@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: limiter-control-plane
+
+  # 数据源配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/rate_limiter?useUnicode=true&characterEncoding=utf8
+    username: root
+    password: 123456  # 改成你的密码
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+    # HikariCP 连接池（可选优化）
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  # Mapper XML 文件位置（如果用注解可不配）
+  mapper-locations: classpath*:/mapper/**/*.xml
+
+  # 实体类扫描路径
+  type-aliases-package: com.ratelimiter.controlplane.infrastructure.persistence.mysql
+
+  # 配置
+  configuration:
+    # 日志实现（开发时用 StdOutImpl，生产用 Slf4j）
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 驼峰转下划线
+    map-underscore-to-camel-case: true
+    # 缓存
+    cache-enabled: false
+
+  # 全局配置
+  global-config:
+    db-config:
+      # 主键类型（AUTO 对应数据库自增）
+      id-type: auto
+      # 逻辑删除字段（可选，如果用软删除）
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      # 字段填充策略（自动填充 created_at / updated_at）
+      insert-strategy: not_null
+      update-strategy: not_null
+
+# 服务端口
+server:
+  port:  8081
+
+# 日志配置
+logging:
+  level:
+    com.ratelimiter. controlplane: DEBUG
+    com.baomidou.mybatisplus:  DEBUG
