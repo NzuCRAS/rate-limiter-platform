@@ -1,4 +1,10 @@
+server:
+  port: 8082
+
 spring:
+  application:
+    name: limiter-data-plane
+
   data:
     redis:
       host: localhost
@@ -9,3 +15,55 @@ spring:
           max-active: 10
           max-idle: 8
           min-idle: 2
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: 1
+      retries: 3
+    consumer:
+      group-id: limiter-data-plane
+      key-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      auto-offset-reset: earliest
+      properties:
+        spring.deserializer.key.delegate.class: org.apache.kafka.common.serialization.StringDeserializer
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.value.default.type: com.ratelimiter.common.web.domain.event.QuotaConsumedEvent
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+    prometheus:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  observations:
+    key-values:
+      service: limiter-data-plane
+      environment: development
+
+app:
+  control-plane:
+    base-url: http://localhost:8081
+  kafka:
+    topic:
+      quota-events: quota-events
+  metrics:
+    enabled: true
+    prefix: rate_limiter_data_plane
+
+logging:
+  level:
+    com.ratelimiter.dataplane: DEBUG
+    root: INFO

@@ -1,11 +1,13 @@
 package com.ratelimiter.dataplane.infrastructure. persistence. redis;
 
+import com.ratelimiter.common.util.PrecisionUtils;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org. springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
@@ -24,7 +26,7 @@ public class RedisRateLimiterRepository {
     public RateLimitResult tryConsumeTokens(String tenantId,
                                             String resourceKey,
                                             long capacity,
-                                            double refillRate,
+                                            BigDecimal refillRateConfig,  // 接收精确值
                                             long tokensToConsume,
                                             String requestId,
                                             long nowMillis) {
@@ -32,14 +34,14 @@ public class RedisRateLimiterRepository {
         String bucketKey = "rate_limiter:" + tenantId + ":" + resourceKey;
         String idempotencyKey = "rate_limiter:idempotent:" + requestId;
 
-        List<String> keys = Arrays.asList(bucketKey, idempotencyKey);
+        List<String> keys = Arrays. asList(bucketKey, idempotencyKey);
         Object[] args = {
                 String.valueOf(capacity),
-                String.valueOf(refillRate),
+                String.valueOf(PrecisionUtils.toDouble(refillRateConfig)),  // 转换为 double
                 String.valueOf(tokensToConsume),
                 String.valueOf(nowMillis),
                 requestId,
-                "300" // 幂等key过期时间5分钟
+                "300"
         };
 
         List result = redisTemplate.execute(tokenBucketScript, keys, args);

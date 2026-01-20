@@ -1,0 +1,74 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: limiter-accounting
+
+  # 数据源配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/rate_limiter?useUnicode=true&characterEncoding=utf8
+    username: root
+    password: 123456  # 改成你的密码
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # Kafka 配置
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: accounting-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.value.default.type: com.ratelimiter.common.web.domain.event.QuotaConsumedEvent
+      # 手动确认
+      enable-auto-commit: false
+      # 批量消费优化配置
+      max-poll-records: 500        # 每次拉取最多500条消息
+      fetch-min-size: 50000        # 最小拉取50KB数据
+      fetch-max-wait:  500          # 最多等待500ms
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value:  1
+      logic-not-delete-value: 0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include:  health,info,prometheus,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details:  always
+    prometheus:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  observations:
+    key-values:
+      service: limiter-accounting
+      environment: development
+
+# 应用配置
+app:
+  kafka:
+    topic:
+      quota-events: quota-events
+  metrics:
+    enabled: true
+    prefix: rate_limiter_accounting
+
+logging:
+  level:
+    com.ratelimiter.accounting: DEBUG
+    org.springframework.kafka: INFO

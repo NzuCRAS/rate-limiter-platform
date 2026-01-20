@@ -5,6 +5,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.math.BigDecimal;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
@@ -21,7 +23,7 @@ class RedisRateLimiterRepositoryTest {
                         "test_tenant",
                         "/test/api",
                         100L,
-                        10.0,
+                        BigDecimal.valueOf(10.00),
                         1L,
                         "test-request-" + System.currentTimeMillis(),
                         System.currentTimeMillis()
