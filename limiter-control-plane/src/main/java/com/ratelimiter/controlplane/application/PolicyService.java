@@ -153,4 +153,54 @@ public class PolicyService extends ServiceImpl<PolicyMapper, PolicyEntity> {
         return this.updateById(policy);
     }
 
+    /**
+     * 查询策略列表
+     */
+    public List<GetPolicyResponse> listPolicies(String tenantId, Boolean enabledOnly) {
+        LambdaQueryWrapper<PolicyEntity> query = new LambdaQueryWrapper<>();
+
+        if (tenantId != null && !tenantId. isBlank()) {
+            query.eq(PolicyEntity:: getTenantId, tenantId);
+        }
+
+        if (enabledOnly != null && enabledOnly) {
+            query.eq(PolicyEntity::getEnabled, true);
+        }
+
+        List<PolicyEntity> entities = this.list(query);
+        return entities.stream()
+                .map(this:: toGetPolicyResponse)
+                .toList();
+    }
+
+    /**
+     * 查询所有启用策略
+     */
+    public List<GetPolicyResponse> listAllEnabledPolicies() {
+        return listPolicies(null, true);
+    }
+
+    /**
+     * Entity -> GetPolicyResponse 转换
+     */
+    private GetPolicyResponse toGetPolicyResponse(PolicyEntity entity) {
+        return new GetPolicyResponse(
+                entity.getId(),
+                entity. getTenantId(),
+                entity.getResourceKey(),
+                entity. getPolicyType(),
+                entity. getWindowSeconds(),
+                entity. getCapacity(),
+                entity.getRefillRate(),
+                entity. getBurstCapacity(),
+                entity.getPriority(),
+                entity.getEnabled(),
+                entity.getVersion(),
+                entity. getMetadata(),
+                entity.getDescription(),
+                entity. getCreatedAt(),
+                entity.getUpdatedAt()
+        );
+    }
+
 }

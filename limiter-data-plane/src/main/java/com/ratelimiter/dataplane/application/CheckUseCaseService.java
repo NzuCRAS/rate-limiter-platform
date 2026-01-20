@@ -1,75 +1,168 @@
 package com.ratelimiter.dataplane.application;
 
+import com.ratelimiter.common.web.domain.event.QuotaConsumedEvent;
 import com.ratelimiter.common.web.dto.dataPlane.CheckRequest;
 import com.ratelimiter.common.web.dto.dataPlane.CheckResponse;
-import com.ratelimiter.dataplane.domain.InMemoryPolicyStore;
+import com.ratelimiter.common.web.dto.dataPlane.PolicyDto;
+import com.ratelimiter.dataplane.application.event.QuotaEventPublisher;
+import com.ratelimiter.dataplane.application.metrics.RateLimiterMetricsService;
 import com.ratelimiter.dataplane.domain.LocalTokenBucketManager;
+import com.ratelimiter.dataplane.domain.PolicyCache;
 import com.ratelimiter.dataplane.infrastructure.persistence.redis.RedisRateLimiterRepository;
+import io.micrometer.core.instrument.Timer;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 
+@Slf4j
 @Service
 public class CheckUseCaseService implements CheckUseCase {
 
     private final LocalTokenBucketManager localBucketManager;
-    private final InMemoryPolicyStore policyStore;
-    private final RedisRateLimiterRepository redisRepository; // 新增
+    private final PolicyCache policyCache;
+    private final RedisRateLimiterRepository redisRepository;
+    private final QuotaEventPublisher eventPublisher; // 新增
+    private final RateLimiterMetricsService metricsService; // 新增
 
     public CheckUseCaseService(LocalTokenBucketManager localBucketManager,
-                               InMemoryPolicyStore policyStore,
-                               RedisRateLimiterRepository redisRepository) {
+                               PolicyCache policyCache,
+                               RedisRateLimiterRepository redisRepository,
+                               QuotaEventPublisher eventPublisher,
+                               RateLimiterMetricsService metricsService) {
         this.localBucketManager = localBucketManager;
-        this.policyStore = policyStore;
+        this.policyCache = policyCache;
         this.redisRepository = redisRepository;
+        this.eventPublisher = eventPublisher;
+        this.metricsService = metricsService;
     }
 
     @Override
     public CheckResponse checkAndConsume(CheckRequest request) {
+        // 开始计时
+        Timer.Sample sample = metricsService.startRateLimitCheck();
+
         long now = Instant.now().toEpochMilli();
+        String processPath = "unknown";
+        String traceId = org.slf4j.MDC.get("traceId");
 
-        // 1. 查策略
-        InMemoryPolicyStore.SimplePolicy policy =
-                policyStore.findPolicy(request.getTenantId(), request.getResourceKey());
+        try {
+            // 1. 查策略
+            PolicyDto policy = policyCache.findPolicy(request.getTenantId(), request.getResourceKey());
 
-        if (policy == null) {
-            return buildDeniedResponse(request, "policy_not_found", 0L, null, now);
-        }
+            if (policy == null) {
+                processPath = "policy_not_found";
+                metricsService.recordPolicyNotFound(request.getTenantId(), request.getResourceKey());
 
-        long tokensToConsume = request.getTokens() == null ? 1L : request.getTokens();
+                CheckResponse response = buildDeniedResponse(request, "policy_not_found", 0L, null, now);
+                publishEventWithMetrics(request, response, null, traceId, processPath);
 
-        // 2. 先尝试本地 token bucket (fast path)
-        boolean localAllowed = localBucketManager. tryConsume(
-                request. getTenantId(),
-                request.getResourceKey(),
-                policy.capacity,
-                policy.refillRate,
-                tokensToConsume,
-                now
-        );
+                // 记录指标
+                metricsService.finishRateLimitCheck(sample, false, "policy_not_found", processPath,
+                        request. getTenantId(), request.getResourceKey());
+                return response;
+            }
 
-        if (localAllowed) {
-            // 本地成功，直接返回允许
-            long remaining = localBucketManager. estimateRemaining(
+            // 记录策略命中
+            metricsService.recordPolicyHit(request.getTenantId(), request.getResourceKey());
+
+            long tokensToConsume = request.getTokens() == null ? 1L : request.getTokens();
+
+            // 2. 本地 token bucket (fast path)
+            boolean localAllowed = localBucketManager. tryConsume(
+                    request.getTenantId(),
+                    request.getResourceKey(),
+                    policy.getCapacity(),
+                    policy.getRefillRate(),
+                    tokensToConsume,
+                    now
+            );
+
+            if (localAllowed) {
+                processPath = "local";
+                long remaining = localBucketManager. estimateRemaining(
+                        request.getTenantId(), request.getResourceKey());
+                CheckResponse response = buildAllowedResponse(request, remaining, policy.getVersion(), now);
+                publishEventWithMetrics(request, response, policy, traceId, processPath);
+
+                // 记录指标
+                metricsService. finishRateLimitCheck(sample, true, "", processPath,
+                        request.getTenantId(), request.getResourceKey());
+                return response;
+            }
+
+            // 3. Redis fallback (slow path)
+            processPath = "redis";
+            RedisRateLimiterRepository.RateLimitResult redisResult = redisRepository.tryConsumeTokens(
+                    request.getTenantId(),
+                    request. getResourceKey(),
+                    policy.getCapacity(),
+                    policy.getRefillRate(),
+                    tokensToConsume,
+                    request.getRequestId(),
+                    now
+            );
+
+            CheckResponse response;
+            if (redisResult.allowed()) {
+                response = buildAllowedResponse(request, redisResult.remaining(), policy.getVersion(), now);
+            } else {
+                response = buildDeniedResponse(request, redisResult.reason(), redisResult.remaining(), policy.getVersion(), now);
+            }
+
+            publishEventWithMetrics(request, response, policy, traceId, processPath);
+
+            // 记录指标
+            metricsService.finishRateLimitCheck(sample, redisResult.allowed(), redisResult.reason(), processPath,
                     request.getTenantId(), request.getResourceKey());
-            return buildAllowedResponse(request, remaining, policy.version, now);
+            return response;
+
+        } catch (Exception e) {
+            processPath = "error";
+            log.error("Error in checkAndConsume.  RequestId: {}, TenantId: {}",
+                    request. getRequestId(), request.getTenantId(), e);
+
+            CheckResponse response = buildDeniedResponse(request, "internal_error", 0L, null, now);
+            publishEventWithMetrics(request, response, null, traceId, processPath);
+
+            // 记录错误指标
+            metricsService. finishRateLimitCheck(sample, false, "internal_error", processPath,
+                    request.getTenantId(), request.getResourceKey());
+            return response;
         }
+    }
 
-        // 3. 本地不足，走 Redis 全局检查 (slow path)
-        RedisRateLimiterRepository. RateLimitResult redisResult = redisRepository.tryConsumeTokens(
-                request.getTenantId(),
-                request.getResourceKey(),
-                policy.capacity,
-                policy.refillRate,
-                tokensToConsume,
-                request.getRequestId(),
-                now
-        );
+    /**
+     * 发布事件并记录相关指标
+     */
+    private void publishEventWithMetrics(CheckRequest request,
+                                         CheckResponse response,
+                                         PolicyDto policy,
+                                         String traceId,
+                                         String processPath) {
+        try {
+            QuotaConsumedEvent event = QuotaConsumedEvent.create(
+                    request. getRequestId(),
+                    request.getTenantId(),
+                    request.getResourceKey(),
+                    request.getTokens() == null ? 1L : request.getTokens(),
+                    response.isAllowed(),
+                    response.getReason(),
+                    response. getPolicyVersion(),
+                    response.getRemaining(),
+                    traceId
+            );
 
-        if (redisResult.allowed()) {
-            return buildAllowedResponse(request, redisResult.remaining(), policy. version, now);
-        } else {
-            return buildDeniedResponse(request, redisResult.reason(), redisResult.remaining(), policy.version, now);
+            event.setProcessPath(processPath);
+            eventPublisher.publishQuotaEvent(event);
+
+            // 记录事件发布成功
+            metricsService. recordEventPublished(request.getTenantId(), request.getResourceKey());
+
+        } catch (Exception e) {
+            log.warn("Failed to publish quota event.  RequestId: {}", request.getRequestId(), e);
+            // 记录事件发布失败
+            metricsService.recordEventPublishFailed(request. getTenantId(), request.getResourceKey(), e.getClass().getSimpleName());
         }
     }
 

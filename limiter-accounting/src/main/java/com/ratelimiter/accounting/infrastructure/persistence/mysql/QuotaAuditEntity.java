@@ -1,6 +1,6 @@
 package com.ratelimiter.accounting.infrastructure.persistence.mysql;
 
-import com.baomidou.mybatisplus.annotation.*;
+import com.baomidou. mybatisplus.annotation.*;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -8,7 +8,8 @@ import java.time.LocalDateTime;
 @Data
 @TableName("quota_audit")
 public class QuotaAuditEntity {
-    @TableId(type = IdType. AUTO)
+
+    @TableId(type = IdType.AUTO)
     private Long id;
 
     @TableField("request_id")
@@ -20,13 +21,13 @@ public class QuotaAuditEntity {
     @TableField("resource_key")
     private String resourceKey;
 
-    private Long tokens;
+    private Long tokens;              // 对应数据库的 tokens 字段
 
-    private Boolean allowed;
+    private Boolean allowed;          // 对应数据库的 allowed 字段
 
-    private Long remaining;
+    private Long remaining;           // 对应数据库的 remaining 字段
 
-    private String reason;
+    private String reason;            // 对应数据库的 reason 字段
 
     @TableField("policy_version")
     private String policyVersion;
@@ -40,8 +41,15 @@ public class QuotaAuditEntity {
     @TableField("latency_ms")
     private Integer latencyMs;
 
-    private Long timestamp;
+    private Long timestamp;           // 对应数据库的 timestamp 字段
 
-    @TableField(fill = FieldFill.INSERT)
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
+
+    // 为了兼容事件数据，添加一些辅助字段（不映射到数据库）
+    @TableField(exist = false)
+    private String eventId;           // 事件ID，用于幂等判断
+
+    @TableField(exist = false)
+    private String traceId;           // 链路追踪ID，可记录到 client_ip 或其他字段
 }

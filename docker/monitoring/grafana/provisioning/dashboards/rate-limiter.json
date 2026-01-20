@@ -1,0 +1,33 @@
+{
+  "dashboard":  {
+    "id": null,
+    "title": "Rate Limiter Platform",
+    "description": "Monitoring dashboard for Rate Limiter Platform",
+    "tags": ["rate-limiter", "microservice"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Request Rate Overview",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(rate_limit_check_total[5m]))",
+            "legendFormat": "Total Requests/sec"
+          },
+          {
+            "expr":  "sum(rate(rate_limit_allowed_total[5m]))",
+            "legendFormat": "Allowed Requests/sec"
+          },
+          {
+            "expr": "sum(rate(rate_limit_denied_total[5m]))",
+            "legendFormat": "Denied Requests/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0}
+      }
+    ],
+    "time": {"from": "now-1h", "to": "now"},
+    "refresh": "5s"
+  }
+}

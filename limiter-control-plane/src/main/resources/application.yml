@@ -47,6 +47,32 @@ mybatis-plus:
       insert-strategy: not_null
       update-strategy: not_null
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+    prometheus:
+      enabled: true
+  observations:
+    key-values:
+      service: limiter-control-plane
+      environment: development
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+# 自定义监控配置
+app:
+  metrics:
+    enabled: true
+    prefix: rate_limiter_control_plane
+
 # 服务端口
 server:
   port:  8081
@@ -54,5 +80,5 @@ server:
 # 日志配置
 logging:
   level:
-    com.ratelimiter. controlplane: DEBUG
+    com.ratelimiter.controlplane: DEBUG
     com.baomidou.mybatisplus:  DEBUG

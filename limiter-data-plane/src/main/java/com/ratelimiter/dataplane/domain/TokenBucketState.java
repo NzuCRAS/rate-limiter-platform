@@ -1,19 +1,28 @@
 package com.ratelimiter.dataplane.domain;
 
+import com.ratelimiter.common.util.PrecisionUtils;
 import lombok.Data;
+
+import java.math.BigDecimal;
 
 @Data
 public class TokenBucketState {
+    private long capacity;
+    private BigDecimal refillRateConfig;    // 原始配置（精确）
+    private double refillRateCache;         // 缓存的 double 值（计算用）
+    private double tokens;
+    private long lastRefillTimestamp;
 
-    private long capacity;              // 最大容量
-    private double refillRate;          // 每秒补充多少 tokens
-    private double tokens;              // 当前 token 数（用 double 支持小数补充）
-    private long lastRefillTimestamp;   // 上次补充时间（毫秒）
-
-    public TokenBucketState(long capacity, double refillRate, long initialTokens, long nowMillis) {
+    public TokenBucketState(long capacity, BigDecimal refillRate, long initialTokens, long nowMillis) {
         this.capacity = capacity;
-        this.refillRate = refillRate;
-        this.tokens = Math.min(initialTokens, capacity);
+        this.refillRateConfig = refillRate;
+        this. refillRateCache = PrecisionUtils.toDouble(refillRate);  // 缓存 double 值
+        this. tokens = Math.min(initialTokens, capacity);
         this.lastRefillTimestamp = nowMillis;
+    }
+
+    // 提供便捷的 getter
+    public double getRefillRate() {
+        return refillRateCache;
     }
 }
