@@ -1,0 +1,4 @@
+﻿tenantId,resourceKey
+tenant_001,/api/v1/orders
+tenant_002,/api/v1/products
+tenant_003,/api/v1/users

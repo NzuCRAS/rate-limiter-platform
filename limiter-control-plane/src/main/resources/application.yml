@@ -77,6 +77,11 @@ app:
 server:
   port:  8081
 
+  tomcat:
+    max-threads: 400
+    accept-count: 2000
+    max-connections: 10000
+
 # 日志配置
 logging:
   level:

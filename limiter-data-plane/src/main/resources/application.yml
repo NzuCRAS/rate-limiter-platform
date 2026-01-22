@@ -1,6 +1,11 @@
 server:
   port: 8082
 
+  tomcat:
+    max-threads: 400
+    accept-count: 2000
+    max-connections: 10000
+
 spring:
   application:
     name: limiter-data-plane
@@ -12,9 +17,9 @@ spring:
       timeout: 2000ms
       lettuce:
         pool:
-          max-active: 32
-          max-idle: 16
-          min-idle: 4
+          max-active: 64
+          max-idle: 32
+          min-idle: 8
 
   kafka:
     bootstrap-servers: localhost:9092
@@ -61,6 +66,7 @@ app:
     producer:
       batch-size: 200
       batch-timeout-ms: 50
+      compression-type: lz4
     topic:
       quota-events: quota-events
   metrics:
