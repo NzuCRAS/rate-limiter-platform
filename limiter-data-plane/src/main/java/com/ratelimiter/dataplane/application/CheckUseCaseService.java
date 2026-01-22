@@ -59,7 +59,7 @@ public class CheckUseCaseService implements CheckUseCase {
 
                 // 记录指标
                 metricsService.finishRateLimitCheck(sample, false, "policy_not_found", processPath,
-                        request. getTenantId(), request.getResourceKey());
+                        request.getTenantId(), request.getResourceKey());
                 return response;
             }
 
@@ -120,20 +120,20 @@ public class CheckUseCaseService implements CheckUseCase {
         } catch (Exception e) {
             processPath = "error";
             log.error("Error in checkAndConsume.  RequestId: {}, TenantId: {}",
-                    request. getRequestId(), request.getTenantId(), e);
+                    request.getRequestId(), request.getTenantId(), e);
 
             CheckResponse response = buildDeniedResponse(request, "internal_error", 0L, null, now);
             publishEventWithMetrics(request, response, null, traceId, processPath);
 
             // 记录错误指标
-            metricsService. finishRateLimitCheck(sample, false, "internal_error", processPath,
+            metricsService.finishRateLimitCheck(sample, false, "internal_error", processPath,
                     request.getTenantId(), request.getResourceKey());
             return response;
         }
     }
 
     /**
-     * 发布事件并记录相关指标
+     * 发布事件并记录相关指标 - 移除异步，直接调用
      */
     private void publishEventWithMetrics(CheckRequest request,
                                          CheckResponse response,
@@ -141,28 +141,35 @@ public class CheckUseCaseService implements CheckUseCase {
                                          String traceId,
                                          String processPath) {
         try {
+            long eventStartTime = System.currentTimeMillis();
+
             QuotaConsumedEvent event = QuotaConsumedEvent.create(
                     request. getRequestId(),
                     request.getTenantId(),
-                    request.getResourceKey(),
-                    request.getTokens() == null ? 1L : request.getTokens(),
+                    request. getResourceKey(),
+                    request. getTokens() == null ? 1L : request.getTokens(),
                     response.isAllowed(),
                     response.getReason(),
                     response. getPolicyVersion(),
-                    response.getRemaining(),
+                    response. getRemaining(),
                     traceId
             );
 
             event.setProcessPath(processPath);
+
+            // 直接调用，不使用 @Async
             eventPublisher.publishQuotaEvent(event);
 
+            long eventLatency = System.currentTimeMillis() - eventStartTime;
+            log.debug("Event published in {}ms for requestId: {}", eventLatency, request. getRequestId());
+
             // 记录事件发布成功
-            metricsService. recordEventPublished(request.getTenantId(), request.getResourceKey());
+            metricsService.recordEventPublished(request.getTenantId(), request.getResourceKey());
 
         } catch (Exception e) {
-            log.warn("Failed to publish quota event.  RequestId: {}", request.getRequestId(), e);
-            // 记录事件发布失败
-            metricsService.recordEventPublishFailed(request. getTenantId(), request.getResourceKey(), e.getClass().getSimpleName());
+            log. warn("Failed to publish quota event.  RequestId: {}", request.getRequestId(), e);
+            metricsService.recordEventPublishFailed(request. getTenantId(), request.getResourceKey(),
+                    e.getClass().getSimpleName());
         }
     }
 

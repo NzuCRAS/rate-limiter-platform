@@ -12,9 +12,9 @@ spring:
       timeout: 2000ms
       lettuce:
         pool:
-          max-active: 10
-          max-idle: 8
-          min-idle: 2
+          max-active: 32
+          max-idle: 16
+          min-idle: 4
 
   kafka:
     bootstrap-servers: localhost:9092
@@ -23,15 +23,19 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       acks: 1
       retries: 3
-    consumer:
-      group-id: limiter-data-plane
-      key-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
-      auto-offset-reset: earliest
-      properties:
-        spring.deserializer.key.delegate.class: org.apache.kafka.common.serialization.StringDeserializer
-        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
-        spring.json.value.default.type: com.ratelimiter.common.web.domain.event.QuotaConsumedEvent
+
+      # 批量与缓冲
+      batch-size: 65536       # 64KB
+      linger-ms: 5
+      buffer-memory: 134217728  # 128MB
+
+      # 压缩（压测时建议打开以提升带宽效率）
+      compression-type: lz4
+
+      # 并发与超时
+      max-in-flight-requests-per-connection: 10
+      request-timeout-ms: 5000
+      delivery-timeout-ms: 15000
 
 management:
   endpoints:
@@ -44,10 +48,6 @@ management:
       show-details: always
     prometheus:
       enabled: true
-  prometheus:
-    metrics:
-      export:
-        enabled: true
   observations:
     key-values:
       service: limiter-data-plane
@@ -57,6 +57,10 @@ app:
   control-plane:
     base-url: http://localhost:8081
   kafka:
+    partition-strategy: round_robin   # 压测期用 round_robin；生产可回到 hybrid/tenant_hash
+    producer:
+      batch-size: 200
+      batch-timeout-ms: 50
     topic:
       quota-events: quota-events
   metrics:

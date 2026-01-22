@@ -1,19 +1,22 @@
-package com.ratelimiter.accounting.infrastructure.messaging.kafka;
+package com.ratelimiter.accounting.infrastructure.messaging. kafka;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ratelimiter.accounting. application.AuditService;
+import com.fasterxml.jackson.databind. ObjectMapper;
+import com.ratelimiter.accounting.application. AuditService;
+import com.ratelimiter.accounting.application.metrics. AuditMetricsService;
 import com.ratelimiter.accounting.infrastructure.persistence.mysql.QuotaAuditEntity;
 import com.ratelimiter.common.web.domain.event.QuotaConsumedEvent;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework. kafka.support.Acknowledgment;
+import org.springframework. kafka.annotation.KafkaListener;
+import org.springframework.kafka.support. Acknowledgment;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging. handler.annotation.Header;
-import org.springframework.messaging.handler. annotation.Payload;
-import org.springframework.stereotype.Component;
+import org.springframework. stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -21,157 +24,140 @@ public class QuotaEventConsumer {
 
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
+    private final AuditMetricsService metricsService;
 
-    // 批量处理缓存
-    private final List<QuotaConsumedEvent> eventBuffer = new ArrayList<>();
-    private final int BATCH_SIZE = 100;  // 批量大小
-    private long lastFlushTime = System.currentTimeMillis();
-    private final long FLUSH_INTERVAL_MS = 5000;  // 5秒强制刷新
-
-    public QuotaEventConsumer(AuditService auditService, ObjectMapper objectMapper) {
+    public QuotaEventConsumer(AuditService auditService, ObjectMapper objectMapper, AuditMetricsService metricsService) {
         this.auditService = auditService;
-        this.objectMapper = objectMapper;
+        this. objectMapper = objectMapper;
+        this.metricsService = metricsService;
     }
-
-/*
-    *//**
-     * 消费配额事件
-     *
-     * @param event 配额消费事件
-     * @param partition 分区号
-     * @param offset 偏移量
-     * @param ack 手动确认
-     *//*
-    @KafkaListener(
-            topics = "${app.kafka.topic.quota-events:quota-events}",
-            groupId = "accounting-service",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
-    public void consumeQuotaEvent(@Payload QuotaConsumedEvent event,
-                                  @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
-                                  @Header(KafkaHeaders.OFFSET) long offset,
-                                  Acknowledgment ack) {
-        try {
-            log.info("=== Received quota event: eventId={}, requestId={}, partition={}, offset={} ===",
-                    event. getEventId(), event.getRequestId(), partition, offset);
-
-            // 转换为审计实体
-            QuotaAuditEntity auditEntity = convertToAuditEntity(event);
-
-            // 使用 try-catch 捕获重复键异常，而不是预先查询
-            try {
-                boolean saved = auditService.save(auditEntity);
-                if (saved) {
-                    log. info("Successfully saved audit record:  eventId={}, requestId={}",
-                            event.getEventId(), event.getRequestId());
-                    ack.acknowledge();
-                } else {
-                    log.error("Failed to save audit record: eventId={}, requestId={}",
-                            event.getEventId(), event.getRequestId());
-                }
-            } catch (Exception dbException) {
-                // 检查是否是重复键异常
-                if (dbException. getCause() instanceof java.sql.SQLIntegrityConstraintViolationException &&
-                        dbException.getMessage().contains("Duplicate entry")) {
-
-                    log.warn("Duplicate audit record detected for requestId: {}, treating as successful",
-                            event.getRequestId());
-                    ack.acknowledge(); // 重复记录也算处理成功
-                } else {
-                    log.error("Database error saving audit record: eventId={}, requestId={}",
-                            event.getEventId(), event.getRequestId(), dbException);
-                    // 不确认消息，会重试
-                }
-            }
-
-        } catch (Exception e) {
-            log.error("Error processing quota event: eventId={}, requestId={}",
-                    event.getEventId(), event.getRequestId(), e);
-        }
-    }*/
-
 
     /**
      * 优化的批量消费版本
-     *
-     * 优势：
-     * 1. 批量接收消息，减少 Kafka 网络开销
-     * 2. 批量查询去重，减少数据库查询次数
-     * 3. 批量插入，大幅提升数据库写入性能
-     * 4. 统一异常处理消息确认
      */
     @KafkaListener(
-            topics = "${app. kafka.topic.quota-events:quota-events}",
+            topics = "${app.kafka.topic.quota-events:quota-events}",
             groupId = "accounting-service",
-            containerFactory = "batchKafkaListenerContainerFactory"
+            containerFactory = "batchKafkaListenerContainerFactory",
+            concurrency = "3"
     )
     public void consumeQuotaEventsBatch(List<QuotaConsumedEvent> events,
-                                        @Header(KafkaHeaders. RECEIVED_PARTITION) List<Integer> partitions,
+                                        @Header(KafkaHeaders.RECEIVED_PARTITION) List<Integer> partitions,
                                         @Header(KafkaHeaders.OFFSET) List<Long> offsets,
                                         Acknowledgment ack) {
+        Timer.Sample sample = null;
+        String tenantId = "mixed";
+
         try {
-            log.info("=== Received batch of {} quota events from partitions: {} ===",
-                    events.size(), partitions);
+            // 统计各分区消息数量
+            Map<Integer, Long> partitionCounts = partitions.stream()
+                    .collect(Collectors.groupingBy(p -> p, Collectors.counting()));
+
+            log.info("=== Received batch:  {} events from partitions:  {} ===",
+                    events.size(), partitionCounts);
 
             if (events.isEmpty()) {
                 ack.acknowledge();
                 return;
             }
 
+            // 按租户统计
+            Map<String, Long> tenantCounts = events. stream()
+                    .collect(Collectors.groupingBy(QuotaConsumedEvent::getTenantId, Collectors.counting()));
+
+            log.debug("Tenant distribution: {}", tenantCounts);
+
+            // 开始计时（使用混合作为统计）
+            sample = metricsService.startKafkaMessageProcessing(tenantId, events. size());
+
             // 1. 提取所有 requestId 用于批量去重查询
             List<String> requestIds = events.stream()
-                    . map(QuotaConsumedEvent:: getRequestId)
+                    .map(QuotaConsumedEvent::getRequestId)
                     .distinct()
                     .toList();
 
-            log.debug("Checking {} unique requestIds for duplicates", requestIds. size());
+            log.debug("Checking {} unique requestIds for duplicates", requestIds.size());
 
             // 2. 批量查询已存在的 requestId
-            List<String> existingRequestIds = auditService. lambdaQuery()
-                    .select(QuotaAuditEntity::getRequestId)
+            long dbStartTime = System.currentTimeMillis();
+            List<String> existingRequestIds = auditService.lambdaQuery()
+                    . select(QuotaAuditEntity::getRequestId)
                     .in(QuotaAuditEntity::getRequestId, requestIds)
                     .list()
-                    .stream()
-                    .map(QuotaAuditEntity::getRequestId)
-                    .toList();
+                    . stream()
+                    .map(QuotaAuditEntity:: getRequestId)
+                    . toList();
 
-            log.debug("Found {} existing records", existingRequestIds. size());
+            long dbDuration = System.currentTimeMillis() - dbStartTime;
+            metricsService.recordAuditSaveLatency(dbDuration, requestIds.size());
+
+            log.debug("Found {} existing records", existingRequestIds.size());
 
             // 3. 过滤出需要插入的事件
-            List<QuotaAuditEntity> auditEntities = events.stream()
-                    .filter(event -> !existingRequestIds.contains(event. getRequestId()))
-                    .map(this::convertToAuditEntity)
-                    .toList();
+            List<QuotaAuditEntity> auditEntities = new ArrayList<>();
+            int duplicateCount = 0;
+
+            for (QuotaConsumedEvent event : events) {
+                if (existingRequestIds.contains(event.getRequestId())) {
+                    duplicateCount++;
+                    metricsService.recordAuditRecordDuplicate(
+                            event.getTenantId(), event.getResourceKey(), event.getRequestId());
+                } else {
+                    auditEntities.add(convertToAuditEntity(event));
+                }
+            }
 
             // 4. 批量插入
-            if (!auditEntities. isEmpty()) {
+            boolean success = true;
+            if (! auditEntities.isEmpty()) {
                 try {
-                    boolean saved = auditService.saveBatch(auditEntities, 1000); // 每批1000条
+                    long insertStartTime = System.currentTimeMillis();
+                    boolean saved = auditService.saveBatch(auditEntities, 1000);
+                    long insertDuration = System.currentTimeMillis() - insertStartTime;
+
+                    metricsService.recordDbBatchOperation("audit_batch_insert", saved, insertDuration, auditEntities.size());
+
                     if (saved) {
                         log.info("Successfully batch saved {} audit records (filtered {} duplicates)",
-                                auditEntities.size(), events.size() - auditEntities.size());
+                                auditEntities.size(), duplicateCount);
+
+                        // 记录每个保存的记录
+                        for (QuotaAuditEntity entity : auditEntities) {
+                            metricsService.recordAuditRecordSaved(entity.getTenantId(), entity.getResourceKey());
+                        }
                     } else {
-                        log.error("Failed to batch save {} audit records", auditEntities.size());
-                        return; // 不确认消息，会重试
+                        success = false;
+                        log. error("Failed to batch save {} audit records", auditEntities. size());
                     }
                 } catch (Exception dbException) {
+                    success = false;
                     log.error("Database error during batch save", dbException);
-
-                    // 如果批量插入失败，可能是部分重复，尝试逐条插入
                     handleBatchInsertFailure(auditEntities);
                 }
             } else {
                 log.info("All {} events in batch already processed, skipping insert", events.size());
             }
 
-            // 5. 确认所有消息处理完成
-            ack. acknowledge();
+            // 5. 记录批处理指标
+            metricsService. recordBatchProcessing(events. size(), auditEntities.size(), duplicateCount, success);
+
+            if (success) {
+                ack.acknowledge();
+            }
+
+            // 6. 完成计时
+            if (sample != null) {
+                metricsService.finishKafkaMessageProcessing(sample, success, tenantId, events.size(), null);
+            }
 
             log.debug("Batch processing completed for {} events", events. size());
 
         } catch (Exception e) {
-            log.error("Error processing quota events batch, count: {}", events.size(), e);
-            // 不确认消息，Kafka 会重试
+            log.error("Error processing quota events batch, count:  {}", events.size(), e);
+            if (sample != null) {
+                metricsService.finishKafkaMessageProcessing(sample, false, tenantId, events.size(),
+                        e.getClass().getSimpleName());
+            }
         }
     }
 
@@ -183,28 +169,34 @@ public class QuotaEventConsumer {
 
         int successCount = 0;
         int duplicateCount = 0;
+        long startTime = System.currentTimeMillis();
 
         for (QuotaAuditEntity entity : entities) {
             try {
-                boolean saved = auditService. save(entity);
+                boolean saved = auditService.save(entity);
                 if (saved) {
                     successCount++;
+                    metricsService.recordAuditRecordSaved(entity. getTenantId(), entity.getResourceKey());
                 } else {
                     log.warn("Failed to save individual record: requestId={}", entity.getRequestId());
                 }
             } catch (Exception e) {
                 if (e. getCause() instanceof java.sql.SQLIntegrityConstraintViolationException &&
-                        e. getMessage().contains("Duplicate entry")) {
+                        e.getMessage().contains("Duplicate entry")) {
                     duplicateCount++;
-                    log.debug("Duplicate record:  requestId={}", entity.getRequestId());
+                    metricsService.recordAuditRecordDuplicate(
+                            entity.getTenantId(), entity.getResourceKey(), entity.getRequestId());
+                    log.debug("Duplicate record: requestId={}", entity.getRequestId());
                 } else {
-                    log.error("Error saving individual record: requestId={}", entity.getRequestId(), e);
-                    throw e; // 重新抛出非重复键异常
+                    log. error("Error saving individual record:  requestId={}", entity.getRequestId(), e);
+                    throw e;
                 }
             }
         }
 
-        log.info("Individual insert completed: {} success, {} duplicates", successCount, duplicateCount);
+        long duration = System.currentTimeMillis() - startTime;
+        metricsService.recordDbBatchOperation("audit_individual_insert_fallback", true, duration, entities. size());
+        log.info("Individual insert completed:  {} success, {} duplicates", successCount, duplicateCount);
     }
 
     /**
@@ -223,11 +215,6 @@ public class QuotaEventConsumer {
         entity.setPolicyVersion(event.getPolicyVersion());
         entity.setLatencyMs(event.getProcessTimeMs() != null ? event.getProcessTimeMs().intValue() : null);
         entity.setTimestamp(event.getTimestamp());
-
-/*        // 把 traceId 放到 client_ip 字段（或者你可以修改数据库添加 trace_id 字段）
-        entity.setClientIp(event.getTraceId());
-        // 把 processPath 放到 user_agent 字段
-        entity.setUserAgent(event.getProcessPath());*/
 
         // 辅助字段
         entity.setEventId(event.getEventId());

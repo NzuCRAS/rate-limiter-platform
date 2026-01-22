@@ -1,0 +1,22 @@
+# 推荐 JVM 参数（G1，低暂停优先）
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=200
+-XX:+ParallelRefProcEnabled
+-XX:+AlwaysPreTouch
+-XX:+UnlockExperimentalVMOptions
+-XX:+TrustFinalNonStaticFields
+-XX:+DisableExplicitGC
+
+# 按容器资源设置堆（示例 2G）
+-Xms2g
+-Xmx2g
+
+# 元空间与线程栈（视具体情况微调）
+-XX:MaxMetaspaceSize=512m
+-Xss512k
+
+# 诊断日志（按需开启）
+-XX:+PrintGCDetails
+-XX:+PrintGCDateStamps
+-XX:+PrintTenuringDistribution
+-Xlog:safepoint

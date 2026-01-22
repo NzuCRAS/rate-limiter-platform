@@ -5,14 +5,12 @@ spring:
   application:
     name: limiter-accounting
 
-  # 数据源配置
   datasource:
     url: jdbc:mysql://localhost:3306/rate_limiter?useUnicode=true&characterEncoding=utf8
     username: root
-    password: 123456  # 改成你的密码
+    password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
 
-  # Kafka 配置
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -22,46 +20,48 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.value.default.type: com.ratelimiter.common.web.domain.event.QuotaConsumedEvent
-      # 手动确认
-      enable-auto-commit: false
-      # 批量消费优化配置
-      max-poll-records: 500        # 每次拉取最多500条消息
-      fetch-min-size: 50000        # 最小拉取50KB数据
-      fetch-max-wait:  500          # 最多等待500ms
 
-# MyBatis-Plus 配置
+      enable-auto-commit: false
+      # 更高吞吐的批量与抓取配置
+      max-poll-records: 1000
+      fetch-min-size: 1048576   # 1MB
+      fetch-max-wait: 300
+      session-timeout-ms: 30000
+      heartbeat-interval-ms: 3000
+      max-partition-fetch-bytes: 2097152
+      connections-max-idle-ms: 540000
+
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
   global-config:
     db-config:
       logic-delete-field: deleted
-      logic-delete-value:  1
+      logic-delete-value: 1
       logic-not-delete-value: 0
 
 management:
   endpoints:
     web:
       exposure:
-        include:  health,info,prometheus,metrics
+        include: health,info,prometheus,metrics
       base-path: /actuator
   endpoint:
     health:
-      show-details:  always
+      show-details: always
     prometheus:
       enabled: true
-  prometheus:
-    metrics:
-      export:
-        enabled: true
   observations:
     key-values:
       service: limiter-accounting
       environment: development
 
-# 应用配置
 app:
   kafka:
+    consumer:
+      concurrency: 12        # 与分区数保持一致
+      batch-size: 1000
+      poll-timeout: 500
     topic:
       quota-events: quota-events
   metrics:

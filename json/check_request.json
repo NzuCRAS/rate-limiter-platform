@@ -1,0 +1,7 @@
+{
+  "requestId": "load-test-REQUEST_ID",
+  "tenantId": "tenant_001",
+  "resourceKey": "/api/v1/orders",
+  "tokens": 1,
+  "timestamp": 1700000000000
+}

@@ -11,13 +11,23 @@ import java.util.List;
 public class AuditService extends ServiceImpl<QuotaAuditMapper, QuotaAuditEntity> {
 
     /**
-     * 批量插入审计记录
-     * MyBatis-Plus 的 saveBatch 已优化为批量插入
-     *
-     * @param records 审计记录列表
-     * @param batchSize 每批大小（如 1000）
+     * 高性能批量插入
      */
-    public boolean batchInsert(List<QuotaAuditEntity> records, int batchSize) {
-        return this.saveBatch(records, batchSize);
+    public boolean saveBatchHighPerformance(List<QuotaAuditEntity> records) {
+        if (records.isEmpty()) {
+            return true;
+        }
+
+        // 使用更大的批量大小，减少数据库交互次数
+        int batchSize = Math.min(2000, records.size()); // 每批最多2000条
+
+        try {
+            return this.saveBatch(records, batchSize);
+        } catch (Exception e) {
+            log.error("High performance batch insert failed, trying smaller batches", e);
+
+            // 如果大批量失败，尝试小批量
+            return this.saveBatch(records, 500);
+        }
     }
 }
